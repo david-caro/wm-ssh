@@ -1,0 +1,41 @@
+[tool.poetry]
+name = "wm-ssh"
+version = "0.1.0"
+description = "Wikimedia ssh wrapper to expand host names"
+authors = ["David Caro <me@dcaro.es>"]
+license = "GPLv3"
+
+[tool.poetry.dependencies]
+python = "^3.7"
+click = "^8.0.3"
+requests = "^2.27.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.5"
+pytest-isort = "^2.0.0"
+pytest-black = "^0.3.12"
+tox = "^3.24.5"
+pytest-flake8 = "^1.0.7"
+coverage = "^6.2"
+types-requests = "^2.26.3"
+mypy = "^0.930"
+pytest-cov = "^3.0.0"
+
+[tool.poetry.plugins."console_scripts"]
+"wm-ssh" = "wm_ssh.cli:wm_ssh"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.coverage.run]
+include = ["*/wmcs_backups/*"]
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 120
+include_trailing_comma = true
+
+[tool.black]
+line_length = 120
