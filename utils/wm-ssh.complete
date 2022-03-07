@@ -1,0 +1,16 @@
+# ex: ts=4 sw=4 et filetype=sh
+#!/bin/bash
+
+_wm_ssh() {
+    _known_hosts
+    local hosts cur
+    hosts=$(cat ~/.cache/wm-ssh/openstackbrowser.txt)
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    COMPREPLY+=(
+        $(compgen -W "$hosts" -- ${cur})
+    )
+    return 0
+}
+
+
+complete -F _wm_ssh wm-ssh
