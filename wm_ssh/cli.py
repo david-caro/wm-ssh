@@ -11,6 +11,7 @@ import requests
 
 LOGGER = logging.getLogger("wm-ssh" if __name__ == "__main__" else __name__)
 DEFAULT_CONFIG_PATH = Path("~/.config/netbox/config.json").expanduser()
+DEFAULT_CACHE_PATH = Path("~/.cache/wm-ssh").expanduser()
 DEFAULT_CONFIG = {
     "netbox_url": "https://netbox.local/api",
     "api_token": "IMADUMMYTOKEN",
@@ -121,8 +122,18 @@ def get_host_from_netbox(config: Dict[str, Any], hostname: str) -> Optional[str]
 
 
 def get_host_from_openstackbrowser(config: Dict[str, Any], hostname: str) -> Optional[str]:
+    cachefile = DEFAULT_CACHE_PATH / "openstackbrowser.txt"
+    if cachefile.exists():
+        all_vms = cachefile.read_text().splitlines()
+        for maybe_vm in all_vms:
+            if maybe_vm.startswith(hostname):
+                return maybe_vm
+
     all_vms_response = requests.get("https://openstack-browser.toolforge.org/api/dsh/servers")
     all_vms_response.raise_for_status()
+    DEFAULT_CACHE_PATH.mkdir(parents=True, exist_ok=True)
+    cachefile.write_text(all_vms_response.text)
+
     all_vms = all_vms_response.text.splitlines()
     for maybe_vm in all_vms:
         if maybe_vm.startswith(hostname):
