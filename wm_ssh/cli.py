@@ -108,14 +108,27 @@ def get_host_from_netbox(config: Dict[str, Any], hostname: str) -> Optional[str]
         api_token=config["api_token"],
         search_query=hostname,
     )
+    LOGGER.debug("netbox: found physical host %s", full_hostname)
     if not full_hostname:
         full_hostname = get_vm(
             netbox_url=config["netbox_url"],
             api_token=config["api_token"],
             search_query=hostname,
         )
+        LOGGER.debug("netbox: found vm: %s", full_hostname)
 
     return full_hostname
+
+
+def get_host_from_openstackbrowser(config: Dict[str, Any], hostname: str) -> Optional[str]:
+    all_vms_response = requests.get("https://openstack-browser.toolforge.org/api/dsh/servers")
+    all_vms_response.raise_for_status()
+    all_vms = all_vms_response.text.splitlines()
+    for maybe_vm in all_vms:
+        if maybe_vm.startswith(hostname):
+            return maybe_vm
+
+    return None
 
 
 @click.command(name="wm-ssh", help="Wikimedia ssh wrapper that expands hostnames")
@@ -141,7 +154,21 @@ def wm_ssh(verbose: bool, hostname: str, netbox_config_file: str, args: List[str
         full_hostname = hostname
     else:
         LOGGER.debug("Trying netbox with %s", hostname)
-        full_hostname = get_host_from_netbox(config=config, hostname=hostname) or hostname
+        try:
+            full_hostname = get_host_from_netbox(config=config, hostname=hostname)
+        except Exception as error:
+            LOGGER.warning(f"Got error when trying to fetch host from netbox: {error}")
+
+        if not full_hostname:
+            LOGGER.debug("Trying openstack browser with %s", hostname)
+            try:
+                full_hostname = get_host_from_openstackbrowser(config=config, hostname=hostname) or hostname
+            except Exception as error:
+                LOGGER.warning(f"Got error when trying to fetch host from openstackbrowser: {error}")
+
+    if not full_hostname:
+        LOGGER.error("Unable to find a hostname for '%s'", full_hostname)
+        sys.exit(1)
 
     LOGGER.info("Found full hostname %s", full_hostname)
     cmd = ["ssh", full_hostname, *args]
