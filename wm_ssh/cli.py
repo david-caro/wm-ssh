@@ -3,6 +3,7 @@ import json
 import logging
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +17,31 @@ DEFAULT_CONFIG = {
     "netbox_url": "https://netbox.local/api",
     "api_token": "IMADUMMYTOKEN",
 }
+
+
+@dataclass
+class CacheFile:
+    path: Path
+
+    def search_host(self, partial_host: str) -> Optional[str]:
+        if self.path.exists():
+            all_hosts = self.path.read_text().splitlines()
+            for maybe_host in all_hosts:
+                if maybe_host.startswith(partial_host):
+                    return maybe_host
+
+        return None
+
+    def add_host(self, full_hostname: str) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.search_host(partial_host=full_hostname):
+            return
+
+        with self.path.open("a") as cache_fd:
+            cache_fd.write(f"{full_hostname}\n")
+
+    def replace_content(self, new_content: str) -> None:
+        self.path.write_text(data=new_content)
 
 
 def get_fqdn(
@@ -103,7 +129,12 @@ def try_ssh(hostname: str):
     )
 
 
-def get_host_from_netbox(config: Dict[str, Any], hostname: str) -> Optional[str]:
+def get_host_from_netbox(config: Dict[str, Any], hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
+    if cachefile:
+        maybe_host = cachefile.search_host(hostname)
+        if maybe_host:
+            return maybe_host
+
     full_hostname = get_physical(
         netbox_url=config["netbox_url"],
         api_token=config["api_token"],
@@ -118,26 +149,27 @@ def get_host_from_netbox(config: Dict[str, Any], hostname: str) -> Optional[str]
         )
         LOGGER.debug("netbox: found vm: %s", full_hostname)
 
+    if cachefile and full_hostname:
+        cachefile.add_host(full_hostname=full_hostname)
+
     return full_hostname
 
 
-def get_host_from_openstackbrowser(config: Dict[str, Any], hostname: str) -> Optional[str]:
-    cachefile = DEFAULT_CACHE_PATH / "openstackbrowser.txt"
-    if cachefile.exists():
-        all_vms = cachefile.read_text().splitlines()
-        for maybe_vm in all_vms:
-            if maybe_vm.startswith(hostname):
-                return maybe_vm
+def get_host_from_openstackbrowser(hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
+    if cachefile:
+        maybe_vm = cachefile.search_host(hostname)
+        if maybe_vm:
+            return maybe_vm
 
     all_vms_response = requests.get("https://openstack-browser.toolforge.org/api/dsh/servers")
     all_vms_response.raise_for_status()
-    DEFAULT_CACHE_PATH.mkdir(parents=True, exist_ok=True)
-    cachefile.write_text(all_vms_response.text)
+    if cachefile:
+        cachefile.replace_content(all_vms_response.text)
+        return cachefile.search_host(hostname)
 
-    all_vms = all_vms_response.text.splitlines()
-    for maybe_vm in all_vms:
+    for maybe_vm in all_vms_response.text.splitlines():
         if maybe_vm.startswith(hostname):
-            return maybe_vm
+            return maybe_vm.strip()
 
     return None
 
@@ -149,9 +181,15 @@ def get_host_from_openstackbrowser(config: Dict[str, Any], hostname: str) -> Opt
     default=str(DEFAULT_CONFIG_PATH),
     help="Path to the configuration file with the netbox settings.",
 )
+@click.option(
+    "--no-caches", help="Ignore the caches, this does not remove them, only ignores them for the run.", is_flag=True
+)
+@click.option("--flush-caches", help="Clean the caches, this removes any cached hosts.", is_flag=True, default=False)
 @click.argument("hostname")
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def wm_ssh(verbose: bool, hostname: str, netbox_config_file: str, args: List[str]) -> None:
+def wm_ssh(
+    verbose: bool, hostname: str, netbox_config_file: str, no_caches: bool, flush_caches: bool, args: List[str]
+) -> None:
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
     else:
@@ -160,20 +198,32 @@ def wm_ssh(verbose: bool, hostname: str, netbox_config_file: str, args: List[str
     LOGGER.debug("Loading config file from %s", netbox_config_file)
     config = load_config_file(config_path=netbox_config_file)
     LOGGER.debug("Config file loaded from %s", netbox_config_file)
+    netbox_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "netbox.txt")
+    openstack_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "openstackbrowser.txt")
+
+    if flush_caches and click.confirm("This will erase the caches permanently, are you sure?"):
+        netbox_cachefile.replace_content("")
+        openstack_cachefile.replace_content("")
+
+    if no_caches:
+        netbox_cachefile = None
+        openstack_cachefile = None
 
     if try_ssh(hostname):
         full_hostname = hostname
     else:
         LOGGER.debug("Trying netbox with %s", hostname)
         try:
-            full_hostname = get_host_from_netbox(config=config, hostname=hostname)
+            full_hostname = get_host_from_netbox(config=config, hostname=hostname, cachefile=netbox_cachefile)
         except Exception as error:
             LOGGER.warning(f"Got error when trying to fetch host from netbox: {error}")
 
         if not full_hostname:
             LOGGER.debug("Trying openstack browser with %s", hostname)
             try:
-                full_hostname = get_host_from_openstackbrowser(config=config, hostname=hostname) or hostname
+                full_hostname = (
+                    get_host_from_openstackbrowser(hostname=hostname, cachefile=openstack_cachefile) or hostname
+                )
             except Exception as error:
                 LOGGER.warning(f"Got error when trying to fetch host from openstackbrowser: {error}")
 
