@@ -112,16 +112,26 @@ def load_config_file(config_path: str = str(DEFAULT_CONFIG_PATH)) -> Dict[str, s
     return json.load(open(config_path))
 
 
-def try_ssh(hostname: str):
-    LOGGER.debug("Trying hostname %s", hostname)
+def try_ssh(hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
+    LOGGER.debug("[direct] Trying hostname %s", hostname)
+    if cachefile:
+        maybe_host = cachefile.search_host(hostname)
+        if maybe_host:
+            LOGGER.debug("[direct] Got host %s from the cache", maybe_host)
+            return maybe_host
+
     res = subprocess.run(args=["ssh", hostname, "hostname"], capture_output=True)
     if res.returncode == 0:
-        LOGGER.debug("Hostname %s worked", hostname)
-        return True
+        LOGGER.debug("[direct] Hostname %s worked", hostname)
+        if cachefile:
+            LOGGER.debug("[direct] Adding %s in the cache", hostname)
+            cachefile.add_host(full_hostname=hostname)
+
+        return hostname
 
     if "Could not resolve hostname" in res.stderr.decode():
-        LOGGER.debug("Hostname %s was unresolved", hostname)
-        return False
+        LOGGER.debug("[direct] Hostname %s was unresolved", hostname)
+        return None
 
     raise Exception(
         f"Unknown error when trying to ssh to {hostname}: \nstdout:\n{res.stdout.decode()}\n"
@@ -200,18 +210,20 @@ def wm_ssh(
     LOGGER.debug("Config file loaded from %s", netbox_config_file)
     netbox_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "netbox.txt")
     openstack_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "openstackbrowser.txt")
+    direct_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "direct.txt")
 
     if flush_caches and click.confirm("This will erase the caches permanently, are you sure?"):
         netbox_cachefile.replace_content("")
         openstack_cachefile.replace_content("")
+        direct_cachefile.replace_content("")
 
     if no_caches:
         netbox_cachefile = None
         openstack_cachefile = None
+        direct_cachefile = None
 
-    if try_ssh(hostname):
-        full_hostname = hostname
-    else:
+    full_hostname = try_ssh(hostname, cachefile=direct_cachefile)
+    if not full_hostname:
         LOGGER.debug("Trying netbox with %s", hostname)
         try:
             full_hostname = get_host_from_netbox(config=config, hostname=hostname, cachefile=netbox_cachefile)

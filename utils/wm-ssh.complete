@@ -4,7 +4,7 @@
 _wm_ssh() {
     _known_hosts
     local hosts cur
-    hosts="$(cat ~/.cache/wm-ssh/openstackbrowser.txt) $(cat ~/.cache/wm-ssh/netbox.txt)"
+    hosts="$(cat ~/.cache/wm-ssh/*)"
     cur="${COMP_WORDS[COMP_CWORD]}"
     COMPREPLY+=(
         $(compgen -W "$hosts" -- ${cur})
