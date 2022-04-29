@@ -112,6 +112,27 @@ def load_config_file(config_path: str = str(DEFAULT_CONFIG_PATH)) -> Dict[str, s
     return json.load(open(config_path))
 
 
+def _remove_duplicated_key_if_needed(stderr: str) -> bool:
+    if "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr:
+        if click.confirm("The host key has changed, remove the old one and retry?", err=True):
+            remove_key_command = None
+            next = False
+            for line in stderr.splitlines():
+                if next:
+                    remove_key_command = line
+                    break
+                if line.strip().startswith("remove with:"):
+                    next = True
+
+            if remove_key_command is not None:
+                subprocess.check_output(["/bin/bash", "-c", remove_key_command.strip()])
+                return True
+            else:
+                raise Exception("Unable to find the command to remove a key from the output: \n{stderr}")
+
+    return False
+
+
 def try_ssh(hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
     LOGGER.debug("[direct] Trying hostname %s", hostname)
     if cachefile:
@@ -132,6 +153,9 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
     if "Could not resolve hostname" in res.stderr.decode():
         LOGGER.debug("[direct] Hostname %s was unresolved", hostname)
         return None
+
+    if _remove_duplicated_key_if_needed(stderr=res.stderr.decode()):
+        return try_ssh(hostname=hostname, cachefile=cachefile)
 
     raise Exception(
         f"Unknown error when trying to ssh to {hostname}: \nstdout:\n{res.stdout.decode()}\n"
@@ -252,14 +276,24 @@ def wm_ssh(
     if user:
         full_hostname = f"{user}@{full_hostname}"
 
+    LOGGER.debug("Waiting for ssh to finish...")
+    _do_ssh(full_hostname=full_hostname, args=args)
+    LOGGER.debug("Done")
+
+
+def _do_ssh(full_hostname: str, args: List[str]) -> None:
     cmd = ["ssh", full_hostname, *args]
     proc = subprocess.Popen(args=cmd, bufsize=0, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, shell=False)
-    LOGGER.debug("Waiting for ssh to finish...")
     proc.wait()
     if proc.returncode != 0:
-        raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
+        LOGGER.debug("First attempt failed with error, rerunning dummy ssh to get output...")
+        capturing_proc = subprocess.run(args=["ssh", full_hostname, "hostname"], capture_output=True)
+        if _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode()):
+            LOGGER.debug("Found and removed duplicated key, retrying...")
+            return _do_ssh(full_hostname=full_hostname, args=args)
 
-    LOGGER.debug("Done")
+        else:
+            raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
 
 
 if __name__ == "__main__":
