@@ -222,6 +222,11 @@ def wm_ssh(
         openstack_cachefile = None
         direct_cachefile = None
 
+    if "@" in hostname:
+        user, hostname = hostname.split("@", 1)
+    else:
+        user = None
+
     full_hostname = try_ssh(hostname, cachefile=direct_cachefile)
     if not full_hostname:
         LOGGER.debug("Trying netbox with %s", hostname)
@@ -244,6 +249,9 @@ def wm_ssh(
         sys.exit(1)
 
     LOGGER.info("Found full hostname %s", full_hostname)
+    if user:
+        full_hostname = f"{user}@{full_hostname}"
+
     cmd = ["ssh", full_hostname, *args]
     proc = subprocess.Popen(args=cmd, bufsize=0, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, shell=False)
     LOGGER.debug("Waiting for ssh to finish...")
