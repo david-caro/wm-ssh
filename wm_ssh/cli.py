@@ -133,15 +133,15 @@ def _remove_duplicated_key_if_needed(stderr: str) -> bool:
     return False
 
 
-def try_ssh(hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
-    LOGGER.debug("[direct] Trying hostname %s", hostname)
+def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> Optional[str]:
+    LOGGER.debug("[direct] Trying hostname %s@%s", user or "nouser", hostname)
     if cachefile:
         maybe_host = cachefile.search_host(hostname)
         if maybe_host:
             LOGGER.debug("[direct] Got host %s from the cache", maybe_host)
             return maybe_host
 
-    res = subprocess.run(args=["ssh", hostname, "hostname"], capture_output=True)
+    res = subprocess.run(args=["ssh", user and f"{user}@{hostname}" or hostname, "hostname"], capture_output=True)
     if res.returncode == 0:
         LOGGER.debug("[direct] Hostname %s worked", hostname)
         if cachefile:
@@ -155,7 +155,7 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
         return None
 
     if _remove_duplicated_key_if_needed(stderr=res.stderr.decode()):
-        return try_ssh(hostname=hostname, cachefile=cachefile)
+        return try_ssh(hostname=hostname, user=user, cachefile=cachefile)
 
     raise Exception(
         f"Unknown error when trying to ssh to {hostname}: \nstdout:\n{res.stdout.decode()}\n"
@@ -251,7 +251,7 @@ def wm_ssh(
     else:
         user = None
 
-    full_hostname = try_ssh(hostname, cachefile=direct_cachefile)
+    full_hostname = try_ssh(hostname, cachefile=direct_cachefile, user=user)
     if not full_hostname:
         LOGGER.debug("Trying netbox with %s", hostname)
         try:
