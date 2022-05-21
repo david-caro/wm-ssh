@@ -1,5 +1,5 @@
 from typing import Any, Dict, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from wm_ssh import cli
 
@@ -15,12 +15,12 @@ def get_config(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return config
 
 
-@patch("wm_ssh.cli.get_vm")
-@patch("wm_ssh.cli.get_physical")
-def test_get_host_from_netbox_tries_phys_host_only_if_found(get_physical_mock, get_vm_mock):
-    get_physical_mock.return_value = "test.host.found"
-    result = cli.get_host_from_netbox(config=get_config(), hostname="test", cachefile=None)
-
+def test_NetboxResolver_get_host_tries_phys_host_only_if_found():
+    netbox_resolver = cli.NetboxResolver(api_token="dummytoken", netbox_url="dummy_url", cachefile=None)
+    netbox_resolver.get_physical = MagicMock(spec=netbox_resolver.get_physical)
+    netbox_resolver.get_physical.return_value = "test.host.found"
+    netbox_resolver.get_vm = MagicMock(spec=netbox_resolver.get_vm)
+    result = netbox_resolver.get_host(hostname="test")
     assert result == "test.host.found"
-    get_physical_mock.assert_called_once()
-    get_vm_mock.assert_not_called()
+    netbox_resolver.get_physical.assert_called_once()
+    netbox_resolver.get_vm.assert_not_called()
