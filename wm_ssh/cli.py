@@ -11,9 +11,14 @@ import click
 import requests
 
 LOGGER = logging.getLogger("wm-ssh" if __name__ == "__main__" else __name__)
-DEFAULT_CONFIG_PATH = Path("~/.config/netbox/config.json").expanduser()
+DEFAULT_CONFIG_PATH = Path("~/.config/wm-ssh/config.json").expanduser()
 DEFAULT_CACHE_PATH = Path("~/.cache/wm-ssh").expanduser()
 DEFAULT_CONFIG = {
+    "netbox_config_path": "~/.config/netbox/config.json",
+    "known_hosts_url": "https://config-master.wikimedia.org/known_hosts.ecdsa",
+    "openstack_browser_url": "https://openstack-browser.toolforge.org/api/dsh/servers",
+}
+DEFAULT_NETBOX_CONFIG = {
     "netbox_url": "https://netbox.local/api",
     "api_token": "IMADUMMYTOKEN",
 }
@@ -44,72 +49,159 @@ class CacheFile:
         self.path.write_text(data=new_content)
 
 
-def get_fqdn(
-    api_token: str,
-    device: Dict[str, Any],
-) -> Optional[str]:
-    if device["primary_ip"]:
+class Resolver:
+    pass
+
+
+@dataclass
+class NetboxResolver(Resolver):
+    api_token: str
+    netbox_url: str
+    cachefile: Optional[CacheFile]
+
+    def get_fqdn(
+        self,
+        device: Dict[str, Any],
+    ) -> Optional[str]:
+        if device["primary_ip"]:
+            response = requests.get(
+                url=device["primary_ip"]["url"],
+                headers={"Authorization": f"Token {self.api_token}"},
+            )
+            response.raise_for_status()
+            ip_info = response.json()
+            dns_name = ip_info["dns_name"]
+            if dns_name:
+                return dns_name
+
+        return f"{device['name']}.{device['site']['slug']}.wmnet"
+
+    def get_vm(
+        self,
+        search_query: str,
+    ) -> Optional[str]:
         response = requests.get(
-            url=device["primary_ip"]["url"],
-            headers={"Authorization": f"Token {api_token}"},
+            url=f"{self.netbox_url}/virtualization/virtual-machines/",
+            params={"q": search_query},
+            headers={"Authorization": f"Token {self.api_token}"},
         )
         response.raise_for_status()
-        ip_info = response.json()
-        dns_name = ip_info["dns_name"]
-        if dns_name:
-            return dns_name
+        vm_infos = response.json()["results"]
+        for vm_info in vm_infos:
+            fqdn = self.get_fqdn(
+                self.api_token,
+                device=vm_info,
+            )
+            if fqdn:
+                return fqdn
 
-    return f"{device['name']}.{device['site']['slug']}.wmnet"
+        return None
 
-
-def get_vm(
-    netbox_url: str,
-    api_token: str,
-    search_query: str,
-) -> Optional[str]:
-    response = requests.get(
-        url=f"{netbox_url}/virtualization/virtual-machines/",
-        params={"q": search_query},
-        headers={"Authorization": f"Token {api_token}"},
-    )
-    response.raise_for_status()
-    vm_infos = response.json()["results"]
-    for vm_info in vm_infos:
-        fqdn = get_fqdn(
-            api_token,
-            device=vm_info,
+    def get_physical(
+        self,
+        search_query: str,
+    ) -> Optional[str]:
+        response = requests.get(
+            url=f"{self.netbox_url}/dcim/devices/",
+            params={"q": search_query},
+            headers={"Authorization": f"Token {self.api_token}"},
         )
-        if fqdn:
-            return fqdn
+        response.raise_for_status()
+        machine_infos = response.json()["results"]
+        for machine_info in machine_infos:
+            fqdn = self.get_fqdn(
+                self.api_token,
+                device=machine_info,
+            )
+            if fqdn:
+                return fqdn
 
-    return None
+        return None
+
+    def get_host(self, hostname: str) -> Optional[str]:
+        if self.cachefile:
+            maybe_host = self.cachefile.search_host(hostname)
+            if maybe_host:
+                return maybe_host
+
+        full_hostname = self.get_physical(search_query=hostname)
+        LOGGER.debug("netbox: found physical host %s", full_hostname)
+        if not full_hostname:
+            full_hostname = self.get_vm(search_query=hostname)
+            LOGGER.debug("netbox: found vm: %s", full_hostname)
+
+        if self.cachefile and full_hostname:
+            self.cachefile.add_host(full_hostname=full_hostname)
+
+        return full_hostname
 
 
-def get_physical(
-    netbox_url: str,
-    api_token: str,
-    search_query: str,
-) -> Optional[str]:
-    response = requests.get(
-        url=f"{netbox_url}/dcim/devices/",
-        params={"q": search_query},
-        headers={"Authorization": f"Token {api_token}"},
-    )
-    response.raise_for_status()
-    machine_infos = response.json()["results"]
-    for machine_info in machine_infos:
-        fqdn = get_fqdn(
-            api_token,
-            device=machine_info,
-        )
-        if fqdn:
-            return fqdn
+@dataclass
+class OpenstackBrowserResolrver(Resolver):
+    openstack_browser_url: str
+    cachefile: Optional[CacheFile]
 
-    return None
+    def get_host(self, hostname: str) -> Optional[str]:
+        if self.cachefile:
+            maybe_vm = self.cachefile.search_host(hostname)
+            if maybe_vm:
+                return maybe_vm
+
+        all_vms_response = requests.get(self.openstack_browser_url)
+        all_vms_response.raise_for_status()
+        if self.cachefile:
+            self.cachefile.replace_content(all_vms_response.text)
+            return self.cachefile.search_host(hostname)
+
+        for maybe_vm in all_vms_response.text.splitlines():
+            if maybe_vm.startswith(hostname):
+                return maybe_vm.strip()
+
+        return None
 
 
-def load_config_file(config_path: str = str(DEFAULT_CONFIG_PATH)) -> Dict[str, str]:
-    return json.load(open(config_path))
+@dataclass
+class KnownHostsResolver(Resolver):
+    known_hosts_url: str
+    cachefile: Optional[CacheFile]
+
+    def get_host(self, hostname: str) -> Optional[str]:
+        if self.cachefile:
+            maybe_known_host = self.cachefile.search_host(hostname)
+            if maybe_known_host:
+                return maybe_known_host
+
+        all_known_hosts_response = requests.get(self.known_hosts_url)
+        all_known_hosts_response.raise_for_status()
+        clean_hosts = [host_line.split(",", 1)[0] for host_line in all_known_hosts_response.text.splitlines()]
+        if self.cachefile:
+            self.cachefile.replace_content("\n".join(clean_hosts))
+            return self.cachefile.search_host(hostname)
+
+        for maybe_known_host in clean_hosts:
+            if maybe_known_host.startswith(hostname):
+                return maybe_known_host.strip()
+
+        return None
+
+
+def load_config_file(config_path: Path) -> Dict[str, str]:
+    LOGGER.debug("Loading config file from %s", config_path)
+    wm_ssh_config = DEFAULT_CONFIG.copy()
+    if config_path.exists():
+        wm_ssh_config.update(json.load(config_path.expanduser().open()))
+        LOGGER.debug("Config file loaded from %s", config_path)
+    else:
+        LOGGER.debug("Config file '%s' not found, using default config.", config_path)
+
+    if wm_ssh_config["netbox_config_path"] and Path(wm_ssh_config["netbox_config_path"]).expanduser().exists():
+        netbox_config = json.load(Path(wm_ssh_config["netbox_config_path"]).expanduser().open())
+        wm_ssh_config["netbox_config"] = netbox_config
+        LOGGER.debug("Netbox config file loaded from '%s'", config_path)
+    else:
+        LOGGER.debug("Unable to load netbox config file '%s'", wm_ssh_config["netbox_config_path"])
+
+    return wm_ssh_config
 
 
 def _remove_duplicated_key_if_needed(stderr: str) -> bool:
@@ -134,14 +226,14 @@ def _remove_duplicated_key_if_needed(stderr: str) -> bool:
 
 
 def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> Optional[str]:
-    LOGGER.debug("[direct] Trying hostname %s@%s", user or "nouser", hostname)
+    LOGGER.debug("[direct] Looking up hostname %s%s", f"{user}@" if user else "", hostname)
     if cachefile:
         maybe_host = cachefile.search_host(hostname)
         if maybe_host:
             LOGGER.debug("[direct] Got host %s from the cache", maybe_host)
             return maybe_host
 
-    res = subprocess.run(args=["ssh", user and f"{user}@{hostname}" or hostname, "hostname"], capture_output=True)
+    res = subprocess.run(args=["ssh", f"{user}@{hostname}" if user else hostname, "hostname"], capture_output=True)
     if res.returncode == 0:
         LOGGER.debug("[direct] Hostname %s worked", hostname)
         if cachefile:
@@ -163,75 +255,45 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
     )
 
 
-def get_host_from_netbox(config: Dict[str, Any], hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
-    if cachefile:
-        maybe_host = cachefile.search_host(hostname)
-        if maybe_host:
-            return maybe_host
-
-    full_hostname = get_physical(
-        netbox_url=config["netbox_url"],
-        api_token=config["api_token"],
-        search_query=hostname,
-    )
-    LOGGER.debug("netbox: found physical host %s", full_hostname)
-    if not full_hostname:
-        full_hostname = get_vm(
-            netbox_url=config["netbox_url"],
-            api_token=config["api_token"],
-            search_query=hostname,
-        )
-        LOGGER.debug("netbox: found vm: %s", full_hostname)
-
-    if cachefile and full_hostname:
-        cachefile.add_host(full_hostname=full_hostname)
-
-    return full_hostname
-
-
-def get_host_from_openstackbrowser(hostname: str, cachefile: Optional[CacheFile]) -> Optional[str]:
-    if cachefile:
-        maybe_vm = cachefile.search_host(hostname)
-        if maybe_vm:
-            return maybe_vm
-
-    all_vms_response = requests.get("https://openstack-browser.toolforge.org/api/dsh/servers")
-    all_vms_response.raise_for_status()
-    if cachefile:
-        cachefile.replace_content(all_vms_response.text)
-        return cachefile.search_host(hostname)
-
-    for maybe_vm in all_vms_response.text.splitlines():
-        if maybe_vm.startswith(hostname):
-            return maybe_vm.strip()
-
-    return None
-
-
 @click.command(name="wm-ssh", help="Wikimedia ssh wrapper that expands hostnames")
 @click.option("-v", "--verbose", help="Show extra verbose output", is_flag=True)
+@click.option("--print-config", help="Show the loaded configuration", is_flag=True)
 @click.option(
-    "--netbox-config-file",
-    default=str(DEFAULT_CONFIG_PATH),
-    help="Path to the configuration file with the netbox settings.",
+    "--config-file",
+    default=Path(str(DEFAULT_CONFIG_PATH)),
+    help="Path to the configuration file with the wm-ssh settings.",
+    type=Path,
 )
 @click.option(
     "--no-caches", help="Ignore the caches, this does not remove them, only ignores them for the run.", is_flag=True
 )
 @click.option("--flush-caches", help="Clean the caches, this removes any cached hosts.", is_flag=True, default=False)
-@click.argument("hostname")
+@click.argument("hostname", required=False, default=None)
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 def wm_ssh(
-    verbose: bool, hostname: str, netbox_config_file: str, no_caches: bool, flush_caches: bool, args: List[str]
-) -> None:
+    verbose: bool,
+    print_config: bool,
+    hostname: str,
+    config_file: Path,
+    no_caches: bool,
+    flush_caches: bool,
+    args: List[str],
+) -> int:
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
 
-    LOGGER.debug("Loading config file from %s", netbox_config_file)
-    config = load_config_file(config_path=netbox_config_file)
-    LOGGER.debug("Config file loaded from %s", netbox_config_file)
+    config = load_config_file(config_path=Path(config_file))
+    if print_config:
+        print(json.dumps(config, indent=4))
+        return 0
+
+    if not hostname:
+        print("Error: Missing argument 'HOSTNAME'")
+        return 1
+
+    known_hosts_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "known_hosts.txt")
     netbox_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "netbox.txt")
     openstack_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "openstackbrowser.txt")
     direct_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "direct.txt")
@@ -246,30 +308,48 @@ def wm_ssh(
         openstack_cachefile = None
         direct_cachefile = None
 
+    resolvers = [
+        KnownHostsResolver(
+            known_hosts_url=config["known_hosts_url"],
+            cachefile=known_hosts_cachefile,
+        )
+    ]
+    if not config.get("netbox_config"):
+        LOGGER.info("Unable to find netbox config, disabling netbox resolver.")
+    else:
+        resolvers.append(
+            NetboxResolver(
+                netbox_url=config["netbox_config"]["netbox_url"],
+                api_token=config["netbox_config"]["api_token"],
+                cachefile=netbox_cachefile,
+            )
+        )
+
+    resolvers.append(
+        OpenstackBrowserResolrver(
+            openstack_browser_url=config["openstack_browser_url"],
+            cachefile=openstack_cachefile,
+        )
+    )
+
     if "@" in hostname:
         user, hostname = hostname.split("@", 1)
     else:
         user = None
 
     full_hostname = try_ssh(hostname, cachefile=direct_cachefile, user=user)
-    if not full_hostname:
-        LOGGER.debug("Trying netbox with %s", hostname)
+    LOGGER.debug("Using resolvers: %s", resolvers)
+    for resolver in resolvers:
+        LOGGER.debug("Trying resolver %s", resolver)
         try:
-            full_hostname = get_host_from_netbox(config=config, hostname=hostname, cachefile=netbox_cachefile)
+            full_hostname = resolver.get_host(hostname=hostname)
+            if full_hostname:
+                break
         except Exception as error:
-            LOGGER.warning(f"Got error when trying to fetch host from netbox: {error}")
-
-        if not full_hostname:
-            LOGGER.debug("Trying openstack browser with %s", hostname)
-            try:
-                full_hostname = (
-                    get_host_from_openstackbrowser(hostname=hostname, cachefile=openstack_cachefile) or hostname
-                )
-            except Exception as error:
-                LOGGER.warning(f"Got error when trying to fetch host from openstackbrowser: {error}")
+            LOGGER.warning(f"Got error when trying to fetch host from {resolver}: {error}")
 
     if not full_hostname:
-        LOGGER.error("Unable to find a hostname for '%s'", full_hostname)
+        LOGGER.error("Unable to find a hostname for '%s'", hostname)
         sys.exit(1)
 
     LOGGER.info("Found full hostname %s", full_hostname)
@@ -279,6 +359,7 @@ def wm_ssh(
     LOGGER.debug("Waiting for ssh to finish...")
     _do_ssh(full_hostname=full_hostname, args=args)
     LOGGER.debug("Done")
+    return 0
 
 
 def _do_ssh(full_hostname: str, args: List[str]) -> None:
@@ -297,4 +378,4 @@ def _do_ssh(full_hostname: str, args: List[str]) -> None:
 
 
 if __name__ == "__main__":
-    wm_ssh()
+    sys.exit(wm_ssh())
