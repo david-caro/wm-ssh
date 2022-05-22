@@ -338,19 +338,23 @@ def wm_ssh(
         user = None
 
     full_hostname = try_ssh(hostname, cachefile=direct_cachefile, user=user)
-    LOGGER.debug("Using resolvers: %s", resolvers)
-    for resolver in resolvers:
-        LOGGER.debug("Trying resolver %s", resolver)
-        try:
-            full_hostname = resolver.get_host(hostname=hostname)
-            if full_hostname:
-                break
-        except Exception as error:
-            LOGGER.warning(f"Got error when trying to fetch host from {resolver}: {error}")
+    if full_hostname:
+        LOGGER.debug("I was able to ssh directly, just continuing.")
+    else:
+        LOGGER.debug("Direct ssh failed, trying to resolve.")
+        LOGGER.debug("Using resolvers: %s", resolvers)
+        for resolver in resolvers:
+            LOGGER.debug("Trying resolver %s", resolver)
+            try:
+                full_hostname = resolver.get_host(hostname=hostname)
+                if full_hostname:
+                    break
+            except Exception as error:
+                LOGGER.warning(f"Got error when trying to fetch host from {resolver}: {error}")
 
-    if not full_hostname:
-        LOGGER.error("Unable to find a hostname for '%s'", hostname)
-        sys.exit(1)
+        if not full_hostname:
+            LOGGER.error("Unable to find a hostname for '%s'", hostname)
+            sys.exit(1)
 
     LOGGER.info("Found full hostname %s", full_hostname)
     if user:
