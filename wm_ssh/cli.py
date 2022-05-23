@@ -289,10 +289,6 @@ def wm_ssh(
         print(json.dumps(config, indent=4))
         return 0
 
-    if not hostname:
-        print("Error: Missing argument 'HOSTNAME'")
-        return 1
-
     known_hosts_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "known_hosts.txt")
     netbox_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "netbox.txt")
     openstack_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "openstackbrowser.txt")
@@ -302,11 +298,17 @@ def wm_ssh(
         netbox_cachefile.replace_content("")
         openstack_cachefile.replace_content("")
         direct_cachefile.replace_content("")
+        if not hostname:
+            return 0
 
     if no_caches:
         netbox_cachefile = None
         openstack_cachefile = None
         direct_cachefile = None
+
+    if not hostname:
+        print("Error: Missing argument 'HOSTNAME'")
+        return 1
 
     resolvers = [
         KnownHostsResolver(
