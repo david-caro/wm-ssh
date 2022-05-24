@@ -28,6 +28,10 @@ DEFAULT_NETBOX_CONFIG = {
 class CacheFile:
     path: Path
 
+    def __post_init__(self):
+        if not self.path.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+
     def search_host(self, partial_host: str) -> Optional[str]:
         if self.path.exists():
             all_hosts = self.path.read_text().splitlines()
