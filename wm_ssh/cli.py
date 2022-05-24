@@ -139,6 +139,12 @@ class NetboxResolver(Resolver):
 
         return full_hostname
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        return f"NetboxResolver(api_token=*******, netbox_url='{self.netbox_url}', cache_file='{self.cachefile}')"
+
 
 @dataclass
 class OpenstackBrowserResolrver(Resolver):
