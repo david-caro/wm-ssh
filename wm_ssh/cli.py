@@ -265,7 +265,14 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
     )
 
 
-@click.command(name="wm-ssh", help="Wikimedia ssh wrapper that expands hostnames")
+@click.command(
+    name="wm-ssh",
+    help="Wikimedia ssh wrapper that expands hostnames",
+    epilog=(
+        "Note that any options to ssh have to be passed after the hostname (ex. wm-ssh dummy-host -D 127.0.0.1:8080)"
+    ),
+    context_settings={"ignore_unknown_options": True},
+)
 @click.option("-v", "--verbose", help="Show extra verbose output", is_flag=True)
 @click.option("--print-config", help="Show the loaded configuration", is_flag=True)
 @click.option(
@@ -279,7 +286,7 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
 )
 @click.option("--flush-caches", help="Clean the caches, this removes any cached hosts.", is_flag=True, default=False)
 @click.argument("hostname", required=False, default=None)
-@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+@click.argument("sshargs", nargs=-1, type=click.UNPROCESSED)
 def wm_ssh(
     verbose: bool,
     print_config: bool,
@@ -287,7 +294,7 @@ def wm_ssh(
     config_file: Path,
     no_caches: bool,
     flush_caches: bool,
-    args: List[str],
+    sshargs: List[str],
 ) -> int:
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -373,7 +380,7 @@ def wm_ssh(
         full_hostname = f"{user}@{full_hostname}"
 
     LOGGER.debug("Waiting for ssh to finish...")
-    _do_ssh(full_hostname=full_hostname, args=args)
+    _do_ssh(full_hostname=full_hostname, args=sshargs)
     LOGGER.debug("Done")
     return 0
 
