@@ -230,7 +230,7 @@ def _remove_duplicated_key_if_needed(stderr: str) -> bool:
                 subprocess.check_output(["/bin/bash", "-c", remove_key_command.strip()])
                 return True
             else:
-                raise Exception("Unable to find the command to remove a key from the output: \n{stderr}")
+                raise Exception(f"Unable to find the command to remove a key from the output: \n{stderr}")
 
     return False
 
