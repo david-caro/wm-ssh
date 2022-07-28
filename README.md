@@ -17,9 +17,14 @@ Just `pip install wm-ssh`, that should bring in a new binary, wm-ssh.
 You can change the default settings by creating a configuration file, and passing the path using
 `--config-file` or using the default `~/.config/wm-ssh/config.json`.
 
-You can se an example of the loaded configuration running:
+You can se an example configuration running:
 ```
-wm-ssh -v --print-config
+wm-ssh --print-example-config
+```
+
+And the currently loaded config with (adding -v will show also the paths of the loaded config files):
+```
+wm-ssh --print-config
 ```
 
 ### Known hosts url
