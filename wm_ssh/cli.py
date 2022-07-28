@@ -204,7 +204,10 @@ def load_config_file(config_path: Path) -> Dict[str, str]:
     else:
         LOGGER.debug("Config file '%s' not found, using default config.", config_path)
 
-    if wm_ssh_config.get("netbox_config_path", None) and Path(wm_ssh_config["netbox_config_path"]).expanduser().exists():
+    if (
+        wm_ssh_config.get("netbox_config_path", None)
+        and Path(wm_ssh_config["netbox_config_path"]).expanduser().exists()
+    ):
         netbox_config = json.load(Path(wm_ssh_config["netbox_config_path"]).expanduser().open())
         wm_ssh_config["netbox_config"] = netbox_config
         LOGGER.debug("Netbox config file loaded from '%s'", config_path)
@@ -214,25 +217,23 @@ def load_config_file(config_path: Path) -> Dict[str, str]:
     return wm_ssh_config
 
 
-def _remove_duplicated_key_if_needed(stderr: str) -> bool:
-    if "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr:
-        if click.confirm("The host key has changed, remove the old one and retry?", err=True):
-            remove_key_command = None
-            next = False
-            for line in stderr.splitlines():
-                if next:
-                    remove_key_command = line
-                    break
-                if line.strip().startswith("remove with:"):
-                    next = True
+def _remove_duplicated_key_if_needed(stderr: str, hostname: str) -> None:
+    if "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED" not in stderr:
+        return
 
-            if remove_key_command is not None:
-                subprocess.check_output(["/bin/bash", "-c", remove_key_command.strip()])
-                return True
-            else:
-                raise Exception(f"Unable to find the command to remove a key from the output: \n{stderr}")
+    if not click.confirm("The host key has changed, remove the old one and retry?", err=True):
+        return
 
-    return False
+    remove_key_command = f"ssh-keygen -R {hostname}"
+    next = False
+    for line in stderr.splitlines():
+        if next:
+            remove_key_command = line
+            break
+        if line.strip().startswith("remove with:"):
+            next = True
+
+    subprocess.check_output(["/bin/bash", "-c", remove_key_command.strip()])
 
 
 def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> Optional[str]:
@@ -256,8 +257,8 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
         LOGGER.debug("[direct] Hostname %s was unresolved", hostname)
         return None
 
-    if _remove_duplicated_key_if_needed(stderr=res.stderr.decode()):
-        return try_ssh(hostname=hostname, user=user, cachefile=cachefile)
+    _remove_duplicated_key_if_needed(stderr=res.stderr.decode(), hostname=hostname)
+    return try_ssh(hostname=hostname, user=user, cachefile=cachefile)
 
     raise Exception(
         f"Unknown error when trying to ssh to {hostname}: \nstdout:\n{res.stdout.decode()}\n"
@@ -307,7 +308,8 @@ def wm_ssh(
         print(f"# You can create a file under {config_file} with this content filling up the fields:")
         print(json.dumps(DEFAULT_CONFIG, indent=4))
         print(
-            f"\n# And for netbox config (optional), create a file under {Path(DEFAULT_CONFIG['netbox_config_path']).expanduser()} with:")
+            f"\n# And for netbox config (optional), create a file under {Path(DEFAULT_CONFIG['netbox_config_path']).expanduser()} with:"
+        )
         print(json.dumps(EXAMPLE_NETBOX_CONFIG, indent=4))
         return 0
 
@@ -402,12 +404,11 @@ def _do_ssh(full_hostname: str, args: List[str]) -> None:
     if proc.returncode != 0:
         LOGGER.debug("First attempt failed with error, rerunning dummy ssh to get output...")
         capturing_proc = subprocess.run(args=["ssh", full_hostname, "hostname"], capture_output=True)
-        if _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode()):
-            LOGGER.debug("Found and removed duplicated key, retrying...")
-            return _do_ssh(full_hostname=full_hostname, args=args)
+        _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode(), hostname=full_hostname)
+        return _do_ssh(full_hostname=full_hostname, args=args)
 
-        else:
-            raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
+    else:
+        raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
 
 
 if __name__ == "__main__":
