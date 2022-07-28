@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "known_hosts_url": "https://config-master.wikimedia.org/known_hosts.ecdsa",
     "openstack_browser_url": "https://openstack-browser.toolforge.org/api/dsh/servers",
 }
-DEFAULT_NETBOX_CONFIG = {
+EXAMPLE_NETBOX_CONFIG = {
     "netbox_url": "https://netbox.local/api",
     "api_token": "IMADUMMYTOKEN",
 }
@@ -204,7 +204,7 @@ def load_config_file(config_path: Path) -> Dict[str, str]:
     else:
         LOGGER.debug("Config file '%s' not found, using default config.", config_path)
 
-    if wm_ssh_config["netbox_config_path"] and Path(wm_ssh_config["netbox_config_path"]).expanduser().exists():
+    if wm_ssh_config.get("netbox_config_path", None) and Path(wm_ssh_config["netbox_config_path"]).expanduser().exists():
         netbox_config = json.load(Path(wm_ssh_config["netbox_config_path"]).expanduser().open())
         wm_ssh_config["netbox_config"] = netbox_config
         LOGGER.debug("Netbox config file loaded from '%s'", config_path)
@@ -275,6 +275,7 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
 )
 @click.option("-v", "--verbose", help="Show extra verbose output", is_flag=True)
 @click.option("--print-config", help="Show the loaded configuration", is_flag=True)
+@click.option("--print-example-config", help="Show a full configuration example", is_flag=True)
 @click.option(
     "--config-file",
     default=Path(str(DEFAULT_CONFIG_PATH)),
@@ -290,6 +291,7 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
 def wm_ssh(
     verbose: bool,
     print_config: bool,
+    print_example_config: bool,
     hostname: str,
     config_file: Path,
     no_caches: bool,
@@ -300,6 +302,14 @@ def wm_ssh(
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    if print_example_config:
+        print(f"# You can create a file under {config_file} with this content filling up the fields:")
+        print(json.dumps(DEFAULT_CONFIG, indent=4))
+        print(
+            f"\n# And for netbox config (optional), create a file under {Path(DEFAULT_CONFIG['netbox_config_path']).expanduser()} with:")
+        print(json.dumps(EXAMPLE_NETBOX_CONFIG, indent=4))
+        return 0
 
     config = load_config_file(config_path=Path(config_file))
     if print_config:
