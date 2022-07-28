@@ -147,7 +147,7 @@ class NetboxResolver(Resolver):
 
 
 @dataclass
-class OpenstackBrowserResolrver(Resolver):
+class OpenstackBrowserResolver(Resolver):
     openstack_browser_url: str
     cachefile: Optional[CacheFile]
 
@@ -345,7 +345,7 @@ def wm_ssh(
         )
 
     resolvers.append(
-        OpenstackBrowserResolrver(
+        OpenstackBrowserResolver(
             openstack_browser_url=config["openstack_browser_url"],
             cachefile=openstack_cachefile,
         )
