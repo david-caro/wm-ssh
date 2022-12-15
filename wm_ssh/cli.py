@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import json
 import logging
+import re
 import subprocess
 import sys
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -61,15 +61,15 @@ class CacheFile:
 
 
 def in_known_hosts(hostname: str) -> bool:
-    hostline=re.compile(f"^{hostname} ")
-    return any(
-        hostline.match(line) for line in LOCAL_KNOWN_HOSTS.open()
-    )
+    hostline = re.compile(f"^{hostname} ")
+    return any(hostline.match(line) for line in LOCAL_KNOWN_HOSTS.open())
+
 
 def remove_from_known_hosts(hostname: str) -> None:
     cur_content = LOCAL_KNOWN_HOSTS.open().read()
     new_content = re.sub(f"^{hostname} .*\n", "", cur_content, flags=re.MULTILINE)
     LOCAL_KNOWN_HOSTS.open("w").write(new_content)
+
 
 class Resolver:
     pass
@@ -273,10 +273,7 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
 
         return hostname
 
-    if any(
-        msg in res.stderr.decode()
-        for msg in ("Could not resolve hostname", "Name or service not known")
-    ):
+    if any(msg in res.stderr.decode() for msg in ("Could not resolve hostname", "Name or service not known")):
         LOGGER.info("Hostname %s unresolved", hostname)
         if from_cache:
             if click.confirm("Do you want to remove it from the cache?", default=False):
@@ -343,7 +340,8 @@ def wm_ssh(
         print(f"# You can create a file under {config_file} with this content filling up the fields:")
         print(json.dumps(DEFAULT_CONFIG, indent=4))
         print(
-            f"\n# And for netbox config (optional), create a file under {Path(DEFAULT_CONFIG['netbox_config_path']).expanduser()} with:"
+            "\n# And for netbox config (optional), create a file under "
+            f"{Path(DEFAULT_CONFIG['netbox_config_path']).expanduser()} with:"
         )
         print(json.dumps(EXAMPLE_NETBOX_CONFIG, indent=4))
         return 0
