@@ -399,16 +399,18 @@ def wm_ssh(
 
 def _do_ssh(full_hostname: str, args: List[str]) -> None:
     cmd = ["ssh", full_hostname, *args]
-    proc = subprocess.Popen(args=cmd, bufsize=0, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, shell=False)
-    proc.wait()
-    if proc.returncode != 0:
-        LOGGER.debug("First attempt failed with error, rerunning dummy ssh to get output...")
-        capturing_proc = subprocess.run(args=["ssh", full_hostname, "hostname"], capture_output=True)
-        _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode(), hostname=full_hostname)
-        return _do_ssh(full_hostname=full_hostname, args=args)
+    with subprocess.Popen(
+        args=cmd, bufsize=0, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, shell=False
+    ) as proc:
+        proc.wait()
+        if proc.returncode != 0:
+            LOGGER.debug("First attempt failed with error, rerunning dummy ssh to get output...")
+            capturing_proc = subprocess.run(args=["ssh", full_hostname, "hostname"], capture_output=True)
+            _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode(), hostname=full_hostname)
+            return _do_ssh(full_hostname=full_hostname, args=args)
 
-    else:
-        raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
+        else:
+            raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
 
 
 if __name__ == "__main__":
