@@ -3,6 +3,7 @@ import json
 import logging
 import subprocess
 import sys
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,6 +12,7 @@ import click
 import requests
 
 LOGGER = logging.getLogger("wm-ssh" if __name__ == "__main__" else __name__)
+LOCAL_KNOWN_HOSTS = Path("~/.ssh/known_hosts").expanduser()
 DEFAULT_CONFIG_PATH = Path("~/.config/wm-ssh/config.json").expanduser()
 DEFAULT_CACHE_PATH = Path("~/.cache/wm-ssh").expanduser()
 DEFAULT_CONFIG = {
@@ -49,9 +51,25 @@ class CacheFile:
         with self.path.open("a") as cache_fd:
             cache_fd.write(f"{full_hostname}\n")
 
+    def remove_host(self, full_hostname: str) -> None:
+        old_content = self.path.open().read()
+        new_content = old_content.replace(f"{full_hostname}\n", "")
+        self.path.open("w").write(new_content)
+
     def replace_content(self, new_content: str) -> None:
         self.path.write_text(data=new_content)
 
+
+def in_known_hosts(hostname: str) -> bool:
+    hostline=re.compile(f"^{hostname} ")
+    return any(
+        hostline.match(line) for line in LOCAL_KNOWN_HOSTS.open()
+    )
+
+def remove_from_known_hosts(hostname: str) -> None:
+    cur_content = LOCAL_KNOWN_HOSTS.open().read()
+    new_content = re.sub(f"^{hostname} .*\n", "", cur_content, flags=re.MULTILINE)
+    LOCAL_KNOWN_HOSTS.open("w").write(new_content)
 
 class Resolver:
     pass
@@ -237,12 +255,14 @@ def _remove_duplicated_key_if_needed(stderr: str, hostname: str) -> None:
 
 
 def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> Optional[str]:
+    from_cache = False
     LOGGER.debug("[direct] Looking up hostname %s%s", f"{user}@" if user else "", hostname)
     if cachefile:
         maybe_host = cachefile.search_host(hostname)
         if maybe_host:
             LOGGER.debug("[direct] Got host %s from the cache", maybe_host)
-            return maybe_host
+            hostname = maybe_host
+            from_cache = True
 
     res = subprocess.run(args=["ssh", f"{user}@{hostname}" if user else hostname, "hostname"], capture_output=True)
     if res.returncode == 0:
@@ -253,8 +273,23 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
 
         return hostname
 
-    if "Could not resolve hostname" in res.stderr.decode():
-        LOGGER.debug("[direct] Hostname %s was unresolved", hostname)
+    if any(
+        msg in res.stderr.decode()
+        for msg in ("Could not resolve hostname", "Name or service not known")
+    ):
+        LOGGER.info("Hostname %s unresolved", hostname)
+        if from_cache:
+            if click.confirm("Do you want to remove it from the cache?", default=False):
+                cachefile.remove_host(hostname)
+                LOGGER.info("Host %s removed from cache, will not autosuggest again.", hostname)
+            raise Exception(f"Unable to resolve host {hostname}")
+
+        if in_known_hosts(hostname):
+            if click.confirm("Host found in known_hosts, should I remove it from there?", default=False):
+                remove_from_known_hosts(hostname)
+                LOGGER.info("Host %s removed from known_hosts, will not autosuggest again.", hostname)
+            raise Exception(f"Unable to resolve host {hostname}")
+
         return None
 
     _remove_duplicated_key_if_needed(stderr=res.stderr.decode(), hostname=hostname)
