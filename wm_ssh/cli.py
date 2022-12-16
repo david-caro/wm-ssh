@@ -425,7 +425,15 @@ def wm_ssh(
         full_hostname = f"{user}@{full_hostname}"
 
     LOGGER.debug("Waiting for ssh to finish...")
-    _do_ssh(full_hostname=full_hostname, args=sshargs)
+    try:
+        _do_ssh(full_hostname=full_hostname, args=sshargs)
+    except subprocess.CalledProcessError as error:
+        LOGGER.debug("Got exception %s", str(error))
+        if error.stdout:
+            print(error.stdout.decode())
+        if error.stderr:
+            print(error.stderr.decode())
+        return error.returncode
     LOGGER.debug("Done")
     return 0
 
