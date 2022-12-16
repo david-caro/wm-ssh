@@ -11,7 +11,7 @@ license = "GPL-3.0-or-later"
 name = "wm-ssh"
 readme = "README.md"
 repository = "https://github.com/david-caro/wm-ssh"
-version = "0.3.8"
+version = "0.4.0"
 
 [tool.poetry.dependencies]
 click = "^8.0.3"
