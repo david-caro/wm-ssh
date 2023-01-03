@@ -235,12 +235,12 @@ def load_config_file(config_path: Path) -> Dict[str, str]:
     return wm_ssh_config
 
 
-def _remove_duplicated_key_if_needed(stderr: str, hostname: str) -> None:
+def _remove_duplicated_key_if_needed(stderr: str, hostname: str) -> bool:
     if "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED" not in stderr:
-        return
+        return False
 
     if not click.confirm("The host key has changed, remove the old one and retry?", err=True):
-        return
+        return False
 
     remove_key_command = f"ssh-keygen -R {hostname}"
     next = False
@@ -252,6 +252,7 @@ def _remove_duplicated_key_if_needed(stderr: str, hostname: str) -> None:
             next = True
 
     subprocess.check_output(["/bin/bash", "-c", remove_key_command.strip()])
+    return True
 
 
 def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> Optional[str]:
@@ -289,8 +290,8 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
 
         return None
 
-    _remove_duplicated_key_if_needed(stderr=res.stderr.decode(), hostname=hostname)
-    return try_ssh(hostname=hostname, user=user, cachefile=cachefile)
+    if _remove_duplicated_key_if_needed(stderr=res.stderr.decode(), hostname=hostname):
+        return try_ssh(hostname=hostname, user=user, cachefile=cachefile)
 
     raise Exception(
         f"Unknown error when trying to ssh to {hostname}: \nstdout:\n{res.stdout.decode()}\n"
@@ -447,8 +448,8 @@ def _do_ssh(full_hostname: str, args: List[str]) -> None:
         if proc.returncode != 0:
             LOGGER.debug("First attempt failed with error, rerunning dummy ssh to get output...")
             capturing_proc = subprocess.run(args=["ssh", full_hostname, "hostname"], capture_output=True)
-            _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode(), hostname=full_hostname)
-            return _do_ssh(full_hostname=full_hostname, args=args)
+            if _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode(), hostname=full_hostname):
+                return _do_ssh(full_hostname=full_hostname, args=args)
 
         else:
             raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
