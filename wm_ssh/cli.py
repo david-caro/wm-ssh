@@ -66,9 +66,11 @@ def in_known_hosts(hostname: str) -> bool:
 
 
 def remove_from_known_hosts(hostname: str) -> None:
-    cur_content = LOCAL_KNOWN_HOSTS.open().read()
-    new_content = re.sub(f"^{hostname} .*\n", "", cur_content, flags=re.MULTILINE)
-    LOCAL_KNOWN_HOSTS.open("w").write(new_content)
+    subprocess.run(
+        args=["ssh-keygen", "-R", hostname],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 class Resolver:
@@ -242,16 +244,7 @@ def _remove_duplicated_key_if_needed(stderr: str, hostname: str) -> bool:
     if not click.confirm("The host key has changed, remove the old one and retry?", err=True):
         return False
 
-    remove_key_command = f"ssh-keygen -R {hostname}"
-    next = False
-    for line in stderr.splitlines():
-        if next:
-            remove_key_command = line
-            break
-        if line.strip().startswith("remove with:"):
-            next = True
-
-    subprocess.check_output(["/bin/bash", "-c", remove_key_command.strip()])
+    remove_from_known_hosts(hostname)
     return True
 
 
@@ -279,13 +272,18 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
         if from_cache:
             if click.confirm("Do you want to remove it from the cache?", default=False):
                 cachefile.remove_host(hostname)
+                remove_from_known_hosts(hostname)
                 LOGGER.info("Host %s removed from cache, will not autosuggest again.", hostname)
+                sys.exit(1)
+
             raise Exception(f"Unable to resolve host {hostname}")
 
         if in_known_hosts(hostname):
             if click.confirm("Host found in known_hosts, should I remove it from there?", default=False):
                 remove_from_known_hosts(hostname)
                 LOGGER.info("Host %s removed from known_hosts, will not autosuggest again.", hostname)
+                sys.exit(1)
+
             raise Exception(f"Unable to resolve host {hostname}")
 
         return None
