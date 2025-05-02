@@ -452,7 +452,8 @@ def _do_ssh(full_hostname: str, args: List[str]) -> None:
                 return _do_ssh(full_hostname=full_hostname, args=args)
 
         else:
-            raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
 
 
 if __name__ == "__main__":
