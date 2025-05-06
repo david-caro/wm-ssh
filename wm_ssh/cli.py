@@ -6,7 +6,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, Iterator, List, TextIO
 
 import click
 import requests
@@ -253,7 +253,10 @@ def try_ssh(hostname: str, cachefile: CacheFile | None, user: str | None = None)
             hostname = maybe_host
             from_cache = True
 
-    res = subprocess.run(args=["ssh", f"{user}@{hostname}" if user else hostname, "hostname"], capture_output=True)
+    res = subprocess.run(
+        args=["ssh", f"{user}@{hostname}" if user else hostname, "hostname"],
+        capture_output=True,
+    )
     if res.returncode == 0:
         LOGGER.debug("[direct] Hostname %s worked", hostname)
         if cachefile:
@@ -291,8 +294,8 @@ def try_ssh(hostname: str, cachefile: CacheFile | None, user: str | None = None)
         return try_ssh(hostname=hostname, user=user, cachefile=cachefile)
 
     raise Exception(
-        f"Unknown error when trying to ssh to {hostname}: \nstdout:\n{res.stdout.decode()}\n"
-        f"stderr:\n{res.stderr.decode()}"
+        f"Unknown error when trying to ssh to {hostname}: \nstdout: \n{res.stdout.decode()}\n"
+        f"stderr: \n{res.stderr.decode()}"
     )
 
 
@@ -335,11 +338,11 @@ def wm_ssh(
         logging.basicConfig(level=logging.INFO)
 
     if print_example_config:
-        print(f"# You can create a file under {config_file} with this content filling up the fields:")
+        print(f"# You can create a file under {config_file} with this content filling up the fields: ")
         print(json.dumps(DEFAULT_CONFIG, indent=4))
         print(
             "\n# And for netbox config (optional), create a file under "
-            f"{Path(DEFAULT_CONFIG['netbox_config_path']).expanduser()} with:"
+            f"{Path(DEFAULT_CONFIG['netbox_config_path']).expanduser()} with: "
         )
         print(json.dumps(EXAMPLE_NETBOX_CONFIG, indent=4))
         return 0
@@ -394,24 +397,35 @@ def wm_ssh(
     else:
         user = None
 
-    full_hostname = try_ssh(hostname, cachefile=None if no_caches else direct_cachefile, user=user)
-    if full_hostname:
-        LOGGER.debug("I was able to ssh directly, just continuing.")
-    else:
-        LOGGER.debug("Direct ssh failed, trying to resolve.")
-        LOGGER.debug("Using resolvers: %s", resolvers)
-        for resolver in resolvers:
-            LOGGER.debug("Trying resolver %s", resolver)
-            try:
-                full_hostname = resolver.get_host(hostname=hostname)
-                if full_hostname:
-                    break
-            except Exception as error:
-                LOGGER.warning(f"Got error when trying to fetch host from {resolver}: {error}")
+    try:
+        LOGGER.debug("Trying to ssh directly to %s", hostname)
+        _do_ssh(full_hostname=f"{user}@{hostname}" if user else hostname, args=sshargs)
+        return 0
 
-        if not full_hostname:
-            LOGGER.error("Unable to find a hostname for '%s'", hostname)
-            sys.exit(1)
+    except subprocess.CalledProcessError as error:
+        LOGGER.debug("Got exception %s", str(error))
+        if _remove_duplicated_key_if_needed(stderr=error.stderr, hostname=hostname):
+            _do_ssh(full_hostname=f"{user}@{hostname}" if user else hostname, args=sshargs)
+            return 0
+
+    except Exception as error:
+        LOGGER.debug("Got exception %s", str(error))
+        raise
+
+    LOGGER.debug("Direct ssh failed, trying to resolve.")
+    LOGGER.debug("Using resolvers: %s", resolvers)
+    for resolver in resolvers:
+        LOGGER.debug("Trying resolver %s", resolver)
+        try:
+            full_hostname = resolver.get_host(hostname=hostname)
+            if full_hostname:
+                break
+        except Exception as error:
+            LOGGER.warning(f"Got error when trying to fetch host from {resolver}: {error}")
+
+    if not full_hostname:
+        LOGGER.error("Unable to find a hostname for '%s'", hostname)
+        sys.exit(1)
 
     LOGGER.info("Found full hostname %s", full_hostname)
     if user:
@@ -423,29 +437,105 @@ def wm_ssh(
     except subprocess.CalledProcessError as error:
         LOGGER.debug("Got exception %s", str(error))
         if error.stdout:
-            print(error.stdout.decode())
+            print(error.stdout)
         if error.stderr:
-            print(error.stderr.decode())
+            print(error.stderr)
         return error.returncode
     LOGGER.debug("Done")
     return 0
 
 
+class Tee(TextIO):
+    def __init__(self, stream: TextIO):
+        self.captured_stream = ""
+        self.stream = stream
+
+    def write(self, s: str) -> int:
+        self.captured_stream += s
+        return self.stream.write(s)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def close(self) -> None:
+        self.stream.close()
+
+    def readable(self) -> bool:
+        return self.stream.readable()
+
+    def writable(self) -> bool:
+        return self.stream.writable()
+
+    def seekable(self) -> bool:
+        return self.stream.seekable()
+
+    def read(self, size: int = -1) -> str:
+        return self.stream.read(size)
+
+    def readline(self, size: int = -1) -> str:
+        return self.stream.readline(size)
+
+    def readlines(self, hint: int = -1) -> List[str]:
+        return self.stream.readlines(hint)
+
+    def writelines(self, lines: Iterable[str]) -> None:
+        self.stream.writelines(lines)
+
+    def __enter__(self) -> "Tee":
+        self.stream.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.stream.__exit__(exc_type, exc_value, traceback)
+
+    def __iter__(self) -> Iterator[str]:
+        return self.stream.__iter__()
+
+    def __next__(self) -> str:
+        return self.stream.__next__()
+
+    def fileno(self) -> int:
+        return self.stream.fileno()
+
+    def isatty(self) -> bool:
+        return self.stream.isatty()
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self.stream.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self.stream.tell()
+
+    def truncate(self, size: int | None = None) -> int:
+        return self.stream.truncate(size)
+
+
 def _do_ssh(full_hostname: str, args: List[str]) -> None:
     cmd = ["ssh", full_hostname, *args]
-    with subprocess.Popen(
-        args=cmd, bufsize=0, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, shell=False
-    ) as proc:
-        proc.wait()
-        if proc.returncode != 0:
-            LOGGER.debug("First attempt failed with error, rerunning dummy ssh to get output...")
-            capturing_proc = subprocess.run(args=["ssh", full_hostname, "hostname"], capture_output=True)
-            if _remove_duplicated_key_if_needed(stderr=capturing_proc.stderr.decode(), hostname=full_hostname):
-                return _do_ssh(full_hostname=full_hostname, args=args)
-
-        else:
+    captured_stdout = Tee(stream=sys.stdout)
+    captured_stderr = Tee(stream=sys.stderr)
+    try:
+        with subprocess.Popen(
+            args=cmd, bufsize=0, stdin=sys.stdin, stdout=captured_stdout, stderr=captured_stderr, shell=False
+        ) as proc:
+            proc.wait()
             if proc.returncode != 0:
-                raise subprocess.CalledProcessError(returncode=proc.returncode, output=None, stderr=None, cmd=cmd)
+                raise subprocess.CalledProcessError(
+                    returncode=proc.returncode,
+                    output=captured_stdout.captured_stream,
+                    stderr=captured_stderr.captured_stream,
+                    cmd=cmd,
+                )
+
+    except subprocess.CalledProcessError as error:
+        LOGGER.debug("Got exception %s", str(error))
+        if error.stdout:
+            print(error.stdout)
+        if error.stderr:
+            print(error.stderr)
+        error.stderr = captured_stderr.captured_stream
+        error.stdout = captured_stdout.captured_stream
+        raise error
 
 
 if __name__ == "__main__":
