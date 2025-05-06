@@ -6,7 +6,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import click
 import requests
@@ -34,7 +34,7 @@ class CacheFile:
         if not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def search_host(self, partial_host: str) -> Optional[str]:
+    def search_host(self, partial_host: str) -> str | None:
         if self.path.exists():
             all_hosts = self.path.read_text().splitlines()
             for maybe_host in all_hosts:
@@ -74,19 +74,20 @@ def remove_from_known_hosts(hostname: str) -> None:
 
 
 class Resolver:
-    pass
+    def get_host(self, hostname: str) -> str | None:
+        raise NotImplementedError("This method should be overridden in subclasses.")
 
 
 @dataclass
 class NetboxResolver(Resolver):
     api_token: str
     netbox_url: str
-    cachefile: Optional[CacheFile]
+    cachefile: CacheFile | None
 
     def get_fqdn(
         self,
         device: Dict[str, Any],
-    ) -> Optional[str]:
+    ) -> str | None:
         if device["primary_ip"]:
             response = requests.get(
                 url=device["primary_ip"]["url"],
@@ -103,7 +104,7 @@ class NetboxResolver(Resolver):
     def get_vm(
         self,
         search_query: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         response = requests.get(
             url=f"{self.netbox_url}/virtualization/virtual-machines/",
             params={"q": search_query},
@@ -112,10 +113,7 @@ class NetboxResolver(Resolver):
         response.raise_for_status()
         vm_infos = response.json()["results"]
         for vm_info in vm_infos:
-            fqdn = self.get_fqdn(
-                self.api_token,
-                device=vm_info,
-            )
+            fqdn = self.get_fqdn(device=vm_info)
             if fqdn:
                 return fqdn
 
@@ -124,7 +122,7 @@ class NetboxResolver(Resolver):
     def get_physical(
         self,
         search_query: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         response = requests.get(
             url=f"{self.netbox_url}/dcim/devices/",
             params={"q": search_query},
@@ -133,16 +131,13 @@ class NetboxResolver(Resolver):
         response.raise_for_status()
         machine_infos = response.json()["results"]
         for machine_info in machine_infos:
-            fqdn = self.get_fqdn(
-                self.api_token,
-                device=machine_info,
-            )
+            fqdn = self.get_fqdn(device=machine_info)
             if fqdn:
                 return fqdn
 
         return None
 
-    def get_host(self, hostname: str) -> Optional[str]:
+    def get_host(self, hostname: str) -> str | None:
         if self.cachefile:
             maybe_host = self.cachefile.search_host(hostname)
             if maybe_host:
@@ -169,9 +164,9 @@ class NetboxResolver(Resolver):
 @dataclass
 class OpenstackBrowserResolver(Resolver):
     openstack_browser_url: str
-    cachefile: Optional[CacheFile]
+    cachefile: CacheFile | None
 
-    def get_host(self, hostname: str) -> Optional[str]:
+    def get_host(self, hostname: str) -> str | None:
         if self.cachefile:
             maybe_vm = self.cachefile.search_host(hostname)
             if maybe_vm:
@@ -184,7 +179,7 @@ class OpenstackBrowserResolver(Resolver):
             return self.cachefile.search_host(hostname)
 
         for maybe_vm in all_vms_response.text.splitlines():
-            if maybe_vm.startswith(hostname):
+            if maybe_vm and maybe_vm.startswith(hostname):
                 return maybe_vm.strip()
 
         return None
@@ -193,9 +188,9 @@ class OpenstackBrowserResolver(Resolver):
 @dataclass
 class KnownHostsResolver(Resolver):
     known_hosts_url: str
-    cachefile: Optional[CacheFile]
+    cachefile: CacheFile | None
 
-    def get_host(self, hostname: str) -> Optional[str]:
+    def get_host(self, hostname: str) -> str | None:
         if self.cachefile:
             maybe_known_host = self.cachefile.search_host(hostname)
             if maybe_known_host:
@@ -209,13 +204,13 @@ class KnownHostsResolver(Resolver):
             return self.cachefile.search_host(hostname)
 
         for maybe_known_host in clean_hosts:
-            if maybe_known_host.startswith(hostname):
+            if maybe_known_host and maybe_known_host.startswith(hostname):
                 return maybe_known_host.strip()
 
         return None
 
 
-def load_config_file(config_path: Path) -> Dict[str, str]:
+def load_config_file(config_path: Path) -> Dict[str, Any]:
     LOGGER.debug("Loading config file from %s", config_path)
     wm_ssh_config = DEFAULT_CONFIG.copy()
     if config_path.exists():
@@ -248,7 +243,7 @@ def _remove_duplicated_key_if_needed(stderr: str, hostname: str) -> bool:
     return True
 
 
-def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> Optional[str]:
+def try_ssh(hostname: str, cachefile: CacheFile | None, user: str | None = None) -> str | None:
     from_cache = False
     LOGGER.debug("[direct] Looking up hostname %s%s", f"{user}@" if user else "", hostname)
     if cachefile:
@@ -267,11 +262,15 @@ def try_ssh(hostname: str, cachefile: Optional[CacheFile], user: str = None) -> 
 
         return hostname
 
-    if any(msg in res.stderr.decode() for msg in ("Could not resolve hostname", "Name or service not known")):
+    if any(
+        msg in res.stderr.decode()
+        for msg in ("Could not resolve hostname", "Name or service not known", "No route to host")
+    ):
         LOGGER.info("Hostname %s unresolved", hostname)
         if from_cache:
             if click.confirm("Do you want to remove it from the cache?", default=False):
-                cachefile.remove_host(hostname)
+                if cachefile:
+                    cachefile.remove_host(hostname)
                 remove_from_known_hosts(hostname)
                 LOGGER.info("Host %s removed from cache, will not autosuggest again.", hostname)
                 sys.exit(1)
@@ -351,9 +350,9 @@ def wm_ssh(
         return 0
 
     known_hosts_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "known_hosts.txt")
-    netbox_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "netbox.txt")
-    openstack_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "openstackbrowser.txt")
-    direct_cachefile = CacheFile(path=DEFAULT_CACHE_PATH / "direct.txt")
+    netbox_cachefile: CacheFile = CacheFile(path=DEFAULT_CACHE_PATH / "netbox.txt")
+    openstack_cachefile: CacheFile = CacheFile(path=DEFAULT_CACHE_PATH / "openstackbrowser.txt")
+    direct_cachefile: CacheFile = CacheFile(path=DEFAULT_CACHE_PATH / "direct.txt")
 
     if flush_caches and click.confirm("This will erase the caches permanently, are you sure?"):
         netbox_cachefile.replace_content("")
@@ -362,16 +361,11 @@ def wm_ssh(
         if not hostname:
             return 0
 
-    if no_caches:
-        netbox_cachefile = None
-        openstack_cachefile = None
-        direct_cachefile = None
-
     if not hostname:
         print("Error: Missing argument 'HOSTNAME'")
         return 1
 
-    resolvers = [
+    resolvers: list[Resolver] = [
         KnownHostsResolver(
             known_hosts_url=config["known_hosts_url"],
             cachefile=known_hosts_cachefile,
@@ -384,14 +378,14 @@ def wm_ssh(
             NetboxResolver(
                 netbox_url=config["netbox_config"]["netbox_url"],
                 api_token=config["netbox_config"]["api_token"],
-                cachefile=netbox_cachefile,
+                cachefile=None if no_caches else netbox_cachefile,
             )
         )
 
     resolvers.append(
         OpenstackBrowserResolver(
             openstack_browser_url=config["openstack_browser_url"],
-            cachefile=openstack_cachefile,
+            cachefile=None if no_caches else openstack_cachefile,
         )
     )
 
@@ -400,7 +394,7 @@ def wm_ssh(
     else:
         user = None
 
-    full_hostname = try_ssh(hostname, cachefile=direct_cachefile, user=user)
+    full_hostname = try_ssh(hostname, cachefile=None if no_caches else direct_cachefile, user=user)
     if full_hostname:
         LOGGER.debug("I was able to ssh directly, just continuing.")
     else:
