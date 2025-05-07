@@ -423,8 +423,8 @@ def wm_ssh(
         except Exception as error:
             LOGGER.warning(f"Got error when trying to fetch host from {resolver}: {error}")
 
-    if not full_hostname:
-        LOGGER.error("Unable to find a hostname for '%s'", hostname)
+    if not full_hostname or full_hostname == hostname:
+        LOGGER.error("Unable to find a working hostname for '%s'", hostname)
         sys.exit(1)
 
     LOGGER.info("Found full hostname %s", full_hostname)
@@ -446,12 +446,15 @@ def wm_ssh(
 
 
 class Tee(TextIO):
+    MAX_CAPTURED_STREAM_SIZE = 1024 * 1024 * 1  # 1MB
+
     def __init__(self, stream: TextIO):
         self.captured_stream = ""
         self.stream = stream
 
     def write(self, s: str) -> int:
-        self.captured_stream += s
+        if len(self.captured_stream) <= self.MAX_CAPTURED_STREAM_SIZE:
+            self.captured_stream += s
         return self.stream.write(s)
 
     def flush(self) -> None:
