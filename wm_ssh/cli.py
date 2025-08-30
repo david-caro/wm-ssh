@@ -26,6 +26,13 @@ EXAMPLE_NETBOX_CONFIG = {
 }
 
 
+def get(*args, headers: dict | None = None, **kwargs) -> requests.Response:
+    if headers is None:
+        headers = {}
+    headers["User-Agent"] = "wm-ssh"
+    return requests.get(*args, headers=headers, **kwargs)
+
+
 @dataclass
 class CacheFile:
     path: Path
@@ -89,7 +96,7 @@ class NetboxResolver(Resolver):
         device: Dict[str, Any],
     ) -> str | None:
         if device["primary_ip"]:
-            response = requests.get(
+            response = get(
                 url=device["primary_ip"]["url"],
                 headers={"Authorization": f"Token {self.api_token}"},
             )
@@ -105,7 +112,7 @@ class NetboxResolver(Resolver):
         self,
         search_query: str,
     ) -> str | None:
-        response = requests.get(
+        response = get(
             url=f"{self.netbox_url}/virtualization/virtual-machines/",
             params={"q": search_query},
             headers={"Authorization": f"Token {self.api_token}"},
@@ -123,7 +130,7 @@ class NetboxResolver(Resolver):
         self,
         search_query: str,
     ) -> str | None:
-        response = requests.get(
+        response = get(
             url=f"{self.netbox_url}/dcim/devices/",
             params={"q": search_query},
             headers={"Authorization": f"Token {self.api_token}"},
@@ -172,7 +179,7 @@ class OpenstackBrowserResolver(Resolver):
             if maybe_vm:
                 return maybe_vm
 
-        all_vms_response = requests.get(self.openstack_browser_url)
+        all_vms_response = get(self.openstack_browser_url)
         all_vms_response.raise_for_status()
         if self.cachefile:
             self.cachefile.replace_content(all_vms_response.text)
@@ -196,7 +203,7 @@ class KnownHostsResolver(Resolver):
             if maybe_known_host:
                 return maybe_known_host
 
-        all_known_hosts_response = requests.get(self.known_hosts_url)
+        all_known_hosts_response = get(self.known_hosts_url)
         all_known_hosts_response.raise_for_status()
         clean_hosts = [host_line.split(",", 1)[0] for host_line in all_known_hosts_response.text.splitlines()]
         if self.cachefile:
